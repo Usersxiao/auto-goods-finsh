@@ -1,0 +1,62 @@
+# 从仓库根目录使用，追加在 docker-compose.yml 和本机覆盖配置之后。
+# 前端需先构建到 frontend/dist；密码沿用项目 .env。
+services:
+  frontend:
+    volumes:
+      - ./docker/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+  operations:
+    image: xianyu-operations:local
+    build:
+      context: .
+      dockerfile: operations/Dockerfile
+    container_name: xianyu-operations
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-xianyu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在项目.env设置MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu_data}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?请在项目.env设置REDIS_PASSWORD}
+      DB_POOL_SIZE: "600"
+      DB_MAX_OVERFLOW: "3"
+      REDIS_POOL_SIZE: "600"
+      SQL_ECHO: "false"
+      STATIC_DIR: /app/static
+      OPERATIONS_OUTPUT_ROOT: /app/backups/operations
+      OPERATIONS_ASSET_MAPPINGS: '{"${OPERATIONS_DESKTOP_ROOT:-${HOME}/Desktop}":"/host-desktop","${OPERATIONS_DOCUMENTS_ROOT:-${HOME}/Documents}":"/host-documents"}'
+      WEBSOCKET_SERVICE_URL: http://websocket:8090
+      SCHEDULER_SERVICE_URL: http://scheduler:8091
+      TZ: Asia/Shanghai
+      PYTHONPATH: /app:/app/backend-web
+    volumes:
+      - ./operations:/app/operations:ro
+      - ./common/services/pricing_policy.py:/app/common/services/pricing_policy.py:ro
+      - ./common/services/ai_bargaining.py:/app/common/services/ai_bargaining.py:ro
+      - ./common/services/ai_reply_recovery.py:/app/common/services/ai_reply_recovery.py:ro
+      - ./common/services/xianyu_publish_video.py:/app/common/services/xianyu_publish_video.py:ro
+      - ./common/services/publish_execution_service.py:/app/common/services/publish_execution_service.py:ro
+      - ./backend-web/app/services/xianyu_direct_publisher.py:/app/backend-web/app/services/xianyu_direct_publisher.py:ro
+      - ./backend-web/app/services/xianyu_item_edit_service.py:/app/backend-web/app/services/xianyu_item_edit_service.py:ro
+      - static-files:/app/static
+      - backup-files:/app/backups
+      - ${OPERATIONS_DESKTOP_ROOT:-${HOME}/Desktop}:/host-desktop:ro
+      - ${OPERATIONS_DOCUMENTS_ROOT:-${HOME}/Documents}:/host-documents:ro
+    ports:
+      - "127.0.0.1:9010:9010"
+    networks:
+      - xianyu-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9010/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s

@@ -1,0 +1,107 @@
+# Copy to compose.local.yaml; keep .env and compose.local.yaml private.
+services:
+  backend-web:
+    image: registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-backend-web:latest
+    platform: linux/arm64
+    environment:
+      ENABLE_REMOTE_ADS: "false"
+      ENABLE_REMOTE_ANNOUNCEMENTS: "false"
+      ENABLE_REMOTE_POPUP_ANNOUNCEMENTS: "false"
+    volumes:
+      - ./backend-web/app/api/routes/advertisements.py:/app/backend-web/app/api/routes/advertisements.py:ro
+      - ./backend-web/app/services/system_setting_service.py:/app/backend-web/app/services/system_setting_service.py:ro
+    ports: !override
+      - "127.0.0.1:8089:8089"
+  websocket:
+    image: registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-websocket:latest
+    platform: linux/arm64
+    ports: !override
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./websocket/_bootstrap.py:/app/websocket/_bootstrap.py:ro
+      - ./websocket/app/services/xianyu/recovery_runtime.py:/app/websocket/app/services/xianyu/recovery_runtime.py:ro
+      - ./common/services/pricing_policy.py:/app/common/services/pricing_policy.py:ro
+      - ./common/services/ai_reply_recovery.py:/app/common/services/ai_reply_recovery.py:ro
+      - ./websocket/app/services/xianyu/auto_reply_service.py:/app/websocket/app/services/xianyu/auto_reply_service.py:ro
+      - ./websocket/app/services/xianyu/auto_reply_filters.py:/app/websocket/app/services/xianyu/auto_reply_filters.py:ro
+      - ./websocket/app/services/xianyu/auto_reply_ai.py:/app/websocket/app/services/xianyu/auto_reply_ai.py:ro
+      - ./websocket/app/services/xianyu/auto_reply_chat.py:/app/websocket/app/services/xianyu/auto_reply_chat.py:ro
+      - ./websocket/app/services/xianyu/ai_reply_engine.py:/app/websocket/app/services/xianyu/ai_reply_engine.py:ro
+      - ./common/services/ai_bargaining.py:/app/common/services/ai_bargaining.py:ro
+      - ./common/services/ai_reply_style.py:/app/common/services/ai_reply_style.py:ro
+      - ./common/services/xianyu_mtop.py:/app/common/services/xianyu_mtop.py:ro
+  scheduler:
+    image: registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-scheduler:latest
+    platform: linux/arm64
+    ports: !override
+      - "127.0.0.1:8091:8091"
+  frontend:
+    image: registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-frontend:latest
+    platform: linux/arm64
+    ports: !override
+      - "127.0.0.1:9000:80"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - ./docker/frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+  operations:
+    image: xianyu-operations:local
+    build:
+      context: .
+      dockerfile: operations/Dockerfile
+    platform: linux/arm64
+    container_name: xianyu-operations
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-xianyu}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-xianyu_data}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      DB_POOL_SIZE: "600"
+      DB_MAX_OVERFLOW: "3"
+      REDIS_POOL_SIZE: "600"
+      SQL_ECHO: "false"
+      STATIC_DIR: /app/static
+      OPERATIONS_OUTPUT_ROOT: /app/backups/operations
+      OPERATIONS_ASSET_MAPPINGS: '{"${OPERATIONS_DESKTOP_ROOT:-${HOME}/Desktop}":"/host-desktop","${OPERATIONS_DOCUMENTS_ROOT:-${HOME}/Documents}":"/host-documents"}'
+      WEBSOCKET_SERVICE_URL: http://websocket:8090
+      SCHEDULER_SERVICE_URL: http://scheduler:8091
+      TZ: Asia/Shanghai
+      PYTHONPATH: /app:/app/backend-web
+    volumes:
+      - ./operations:/app/operations:ro
+      - ./common/services/pricing_policy.py:/app/common/services/pricing_policy.py:ro
+      - ./common/services/ai_bargaining.py:/app/common/services/ai_bargaining.py:ro
+      - ./common/services/ai_reply_recovery.py:/app/common/services/ai_reply_recovery.py:ro
+      - ./common/services/xianyu_publish_video.py:/app/common/services/xianyu_publish_video.py:ro
+      - ./common/services/publish_execution_service.py:/app/common/services/publish_execution_service.py:ro
+      - ./backend-web/app/services/xianyu_direct_publisher.py:/app/backend-web/app/services/xianyu_direct_publisher.py:ro
+      - ./backend-web/app/services/xianyu_item_edit_service.py:/app/backend-web/app/services/xianyu_item_edit_service.py:ro
+      - static-files:/app/static
+      - backup-files:/app/backups
+      - ${OPERATIONS_DESKTOP_ROOT:-${HOME}/Desktop}:/host-desktop:ro
+      - ${OPERATIONS_DOCUMENTS_ROOT:-${HOME}/Documents}:/host-documents:ro
+    ports:
+      - "127.0.0.1:9010:9010"
+    networks:
+      - xianyu-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9010/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
