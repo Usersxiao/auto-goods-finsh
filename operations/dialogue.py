@@ -814,6 +814,7 @@ async def plan_and_run(payload,user,job):
             ident=(job.result or {}).get('publication',{}).get('account_id') or job.parameters.get('publish_account_id')
             rows=await performance.accounts(user.id,ident) if ident else []
             context['own_items']=await performance.catalog(user.id,rows[0]) if rows else []
+    plan_event=await store.append_event(job.id,user.id,'tool','理解需求与规划操作',{'operation':'plan'},'running') if job else None
     try:
         config=await ai_connections.resolve(user.id,job.parameters['ai_config_ref']) if job and job.parameters.get('ai_config_ref') else await ai.model_config(user.id,await ai.account_for(user.id,job.parameters.get('account_id') if job else None))
         output=await asyncio.wait_for(ai.ask(config,
@@ -836,8 +837,12 @@ async def plan_and_run(payload,user,job):
             context,max_tokens=3500,request_timeout=40,json_attempts=1,transport_retries=False),timeout=45)
         plan=ToolPlan(**output)
     except Exception:
+        if plan_event:await store.finish_event(plan_event,{'operation':'plan','error':'本次规划未完成'},'error')
         return {'success':True,**({'job':api.serialize(job,True)} if job else {}),'reply':'这次指令理解暂未完成，现有商品已保留。可以直接说“添加视频”“售价改成29.9”“查看账号”“发布当前商品”；说“对话功能”可查看完整操作。'}
-    if not plan.actions:return {'success':True,**({'job':api.serialize(job,True)} if job else {}),'reply':plan.reply or '请补充要操作的商品、账号或内容。'}
+    if not plan.actions:
+        if plan_event:await store.finish_event(plan_event,{'operation':'plan','result':'没有需要执行的操作'})
+        return {'success':True,**({'job':api.serialize(job,True)} if job else {}),'reply':plan.reply or '请补充要操作的商品、账号或内容。'}
+    if plan_event:await store.finish_event(plan_event,{'operation':'plan','result':'已生成 '+str(len(plan.actions))+' 步操作计划，开始执行'})
     return await run_actions(plan.actions,job,user,payload)
 
 

@@ -116,7 +116,7 @@ export interface OperationEvent {
   kind: 'user' | 'assistant' | 'tool'
   name: string
   status: 'running' | 'success' | 'error'
-  data: { text?: string; input?: OperationValue; output?: OperationValue; error?: string; historical?: boolean; outcome?: boolean }
+  data: { text?: string; input?: OperationValue; output?: OperationValue; error?: string; error_type?: string; result?: string; operation?: string; historical?: boolean; outcome?: boolean }
   created_at: string
   finished_at?: string | null
 }

@@ -307,3 +307,8 @@ compose.*.local.yml
 # Local shell setup and newly recorded browser sessions
 **/.xcode.env
 /common/services/captcha/human_trails/*.json
+
+# 本机本地开发脚本（不入库）
+/compose.dev.yaml
+/dev-start.sh
+/dev-stop.sh
