@@ -33,12 +33,24 @@ export function conversationMessages(events:OperationEvent[]) {
     return true
   })
 }
-export function Conversation({ events,query='',activeId=null }: { events: OperationEvent[];query?:string;activeId?:string|number|null }) {
-  return <>{conversationMessages(events).map(event=><div key={event.id} id={`operation-event-${event.id}`} data-event-id={String(event.id)} data-search-active={activeId===event.id||undefined} className="conversation-entry">{event.kind==='user'
-    ? <div className="message-user"><div>{highlight(String(event.data.text||event.name),query)}</div></div>
-    : event.kind==='tool'
-      ? <ToolEvent event={event}/>
-      : <AssistantMessage event={event} query={query}/>}</div>)}</>
+export function Conversation({ events,query='',activeId=null,onRetry }: { events: OperationEvent[];query?:string;activeId?:string|number|null;onRetry?:(message:string)=>void }) {
+  const list=conversationMessages(events)
+  const retryMessage=(index:number):string|null=>{
+    for(let position=index-1;position>=0;position-=1){
+      if(list[position].kind!=='user')continue
+      const message=String(list[position].data.text||'')
+      return message&&!message.includes('[已隐藏]')?message:null
+    }
+    return null
+  }
+  return <>{list.map((event,index)=>{
+    const retry=event.kind==='tool'&&event.status==='error'&&onRetry?(() => {const message=retryMessage(index);return message?()=>onRetry(message):null})():null
+    return <div key={event.id} id={`operation-event-${event.id}`} data-event-id={String(event.id)} data-search-active={activeId===event.id||undefined} className={event.kind==='tool'?'conversation-entry conversation-entry-tool':'conversation-entry'}>{event.kind==='user'
+      ? <div className="message-user"><div>{highlight(String(event.data.text||event.name),query)}</div></div>
+      : event.kind==='tool'
+        ? <ToolEvent event={event} retry={retry}/>
+        : <AssistantMessage event={event} query={query}/>}</div>
+  })}</>
 }
 
 function AssistantMessage({ event,query }: { event: OperationEvent;query:string }) {
@@ -84,7 +96,7 @@ function formatDuration(seconds:number):string {
   if(seconds<60)return (seconds<10?Math.round(seconds*10)/10:Math.round(seconds))+' 秒'
   return Math.floor(seconds/60)+' 分 '+String(Math.round(seconds%60)).padStart(2,'0')+' 秒'
 }
-function ToolEvent({ event }: { event: OperationEvent }) {
+function ToolEvent({ event,retry }: { event: OperationEvent;retry:(()=>void)|null }) {
   const data=event.data,operation=data.operation?String(data.operation):''
   const label=operation?(TOOL_LABELS[operation]??operation):event.name.replace(/^对话操作：/,'')
   const details=useRef<HTMLDetailsElement>(null),lastStatus=useRef<string|null>(null)
@@ -110,6 +122,7 @@ function ToolEvent({ event }: { event: OperationEvent }) {
     <div className="tool-event-body">
       {data.result&&<p className="tool-event-text">{data.result}</p>}
       {event.status==='error'&&<p className="tool-event-error">{data.error||(data.error_type?'执行中断（'+data.error_type+'）':'执行未完成')}</p>}
+      {event.status==='error'&&retry&&<button type="button" className="tool-event-retry" onClick={retry}>重试这条指令</button>}
       {data.input!=null&&<pre className="tool-event-json">{JSON.stringify(data.input,null,2)}</pre>}
       {data.output!=null&&<pre className="tool-event-json">{JSON.stringify(data.output,null,2)}</pre>}
     </div>

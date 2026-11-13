@@ -413,8 +413,9 @@ async def add_product_images(job_id:str,payload:VideoInput,user:User=Depends(get
 
 
 @router.get("/jobs/{job_id}/events")
-async def event_list(job_id:str,user:User=Depends(get_current_active_user)):
+async def event_list(job_id:str,since:int|None=None,user:User=Depends(get_current_active_user)):
     job=await owned(job_id,user)
+    if since is not None:return {"events":await store.events(job_id,user.id,since=since)}
     rows=await store.events(job_id,user.id)
     persisted_stages={row["name"] for row in rows if row["kind"]=="tool"}
     rows=[row for row in trace.legacy(job) if row["name"] not in persisted_stages]+rows
@@ -748,7 +749,7 @@ async def dispatch_chat(payload:Chat,user):
         return response
     if job_id and not re.search(r"^(?:请|帮我|给我)?(?:研究|采集|分析.*(?:市场|竞品)|关键词)",text):
         return await dialogue.handle(payload,user,await owned(job_id,user),fallback=True)
-    if not job_id and re.search(r'账号|AI接口|模型|卡券|发布模式|同步发布|所在地|帮我|我想|我要',text) and not re.match(r'^(?:请|帮我|给我)?(?:研究|采集|关键词)',text):
+    if not job_id and re.search(r'账号|AI接口|模型|卡券|发布模式|同步发布|所在地|帮我|我想|我要|待办|日历',text) and not re.match(r'^(?:请|帮我|给我)?(?:研究|采集|关键词)',text):
         return await dialogue.handle(payload,user,None,fallback=True)
     keyword=extract_keyword(text)
     if not keyword:

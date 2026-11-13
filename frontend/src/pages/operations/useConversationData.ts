@@ -8,6 +8,13 @@ function issue(reason:unknown):ReadIssue {
   const status=(reason as {response?:{status?:number}})?.response?.status
   return {message:errorText(reason),unavailable:status===403||status===404}
 }
+/** Merges incremental event fetches; legacy rows keep their original leading order. */
+function mergeEvents(prev:OperationEvent[],incoming:OperationEvent[]):OperationEvent[] {
+  const map=new Map(prev.map(event=>[String(event.id),event]))
+  for(const event of incoming)map.set(String(event.id),event)
+  const rank=(event:OperationEvent):[number,number]=>{const key=String(event.id);return key.startsWith('legacy-')?[0,Number(key.slice(7))]:[1,Number(event.id)]}
+  return [...map.values()].sort((left,right)=>{const a=rank(left),b=rank(right);return a[0]-b[0]||a[1]-b[1]})
+}
 function version(job:OperationJob) {
   return JSON.stringify([job.id,job.updated_at,job.stage,job.status,job.material_id,job.publication,job.conversation])
 }
@@ -59,9 +66,12 @@ export function useConversationData(owner:number|undefined,currentId:string|null
     let pending:Promise<void>|null=null
     let missing=false
     let failed=false
+    let sinceId:number|null=null
+    let resync=true
     setHistoryId(null)
     const valid=()=>!disposed&&selectedId.current===currentId&&useAuthStore.getState().user?.user_id===owner
     const load=(force=false):Promise<void>=>{
+      if(force)resync=true
       if(pending)return pending.then(()=>force&&valid()?load(true):undefined)
       if(!currentId||!valid()||missing&&!force)return Promise.resolve()
       const row=rows.current.find(value=>value.id===currentId)
@@ -87,9 +97,15 @@ export function useConversationData(owner:number|undefined,currentId:string|null
         }
         const history=async()=>{
           try {
-            const value=await getOperationEvents(currentId)
-            if(valid()&&!missing){setEvents(value.events);setHistoryId(currentId);setHistoryError('')}
-          } catch(reason) {if(valid()&&!missing)setHistoryError(errorText(reason))}
+            // Poll already-loaded sessions incrementally; full reloads resync after errors or sends.
+            const incremental=!resync&&sinceId!==null&&!missing
+            const value=await getOperationEvents(currentId,incremental&&sinceId!==null?sinceId:undefined)
+            if(!valid()||missing)return
+            setEvents(previous=>incremental?mergeEvents(previous,value.events):value.events)
+            resync=false
+            sinceId=value.events.reduce((max,event)=>{const id=Number(event.id);return Number.isFinite(id)&&id>max?id:max},sinceId??0)
+            setHistoryId(currentId);setHistoryError('')
+          } catch(reason) {if(valid()&&!missing){setHistoryError(errorText(reason));resync=true}}
         }
         await Promise.all([detail(),history()])
         if(valid())setSessionBusy(false)

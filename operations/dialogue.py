@@ -53,7 +53,7 @@ TOOLS={
     'history':'列出历史任务',
     'open_job':'打开历史任务；query=任务ID或唯一商品关键词',
     'inspect':'查看当前结果、预览、报告、发货或同步发布状态；section=summary|preview|report|delivery|distribution',
-    'settings':'修改当前任务设置；patch包含publish_account_id(账号名或ID)、publish_mode(review/automatic)、publish_address、auto_reply_enabled、auto_delivery_enabled、price_min/max、unit_cost/support_cost/refund_cost/acquisition_cost/target_contribution、fee_rate、sample_target、product_kind；scope=task|default',
+    'settings':'修改当前任务设置；patch包含publish_account_id(账号名或ID)、publish_mode(review/automatic)、publish_address、auto_reply_enabled、auto_delivery_enabled、price_min/max、unit_cost/support_cost/refund_cost/acquisition_cost/target_contribution、fee_rate、sample_target、product_kind、research_limit(竞品分析样本件数1-100默认100，AI接口不稳或超时时可调小以加快完成)；scope=task|default',
     'variant':'选择文案版本；index从1开始',
     'edit':'直接修改文案或价格；title/description/price可只提供需要改的字段',
     'revise':'按instruction重新生成文案；保留研究和素材，作为批次最后一步',

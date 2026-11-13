@@ -232,11 +232,20 @@ async def finish_event(event_id,data,status="success"):
         await session.commit()
 
 
-async def events(job_id,owner_id):
+async def events(job_id,owner_id,since=None):
     async with async_session_maker() as session:
         # Sort the small IDs before loading JSON payloads.
-        ids=(await session.execute(select(Event.id).where(Event.job_id==job_id,Event.owner_id==owner_id)
-                                   .order_by(Event.id.desc()).limit(400))).scalars().all()
+        query=select(Event.id).where(Event.job_id==job_id,Event.owner_id==owner_id)
+        if since is None:
+            ids=(await session.execute(query.order_by(Event.id.desc()).limit(400))).scalars().all()
+            ids.sort()
+        else:
+            # Incremental reads also resend the recent tail so running→finished
+            # transitions always reach the client even when the row id predates the cursor.
+            tail=(await session.execute(query.order_by(Event.id.desc()).limit(50))).scalars().all()
+            fresh=(await session.execute(query.where(or_(Event.id>since,Event.status=='running'))
+                                         .order_by(Event.id.desc()).limit(400))).scalars().all()
+            ids=sorted(set(tail)|set(fresh))
         rows=(await session.execute(select(Event).where(Event.id.in_(ids)))).scalars().all() if ids else []
         rows.sort(key=lambda row:row.id)
         return [{"id":row.id,"kind":row.kind,"name":row.name,"status":row.status,"data":row.data,
