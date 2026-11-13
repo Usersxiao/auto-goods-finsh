@@ -12,11 +12,16 @@ export interface OperationCoverage {
 }
 export interface OperationItem {
   item_id: string
-  rank: number
+  rank?: number
   title: string
-  price?: string | number
+  price?: string | number | null
   want_count?: number | null
-  kind: string
+  kind?: string
+  image_url?: string | null
+  description?: string
+  search_preview?: string
+  query?: string
+  page?: number
 }
 export interface OperationVariant {
   style: string
@@ -30,8 +35,11 @@ export interface OperationResult {
   category?: OperationCategory
   automation?: { status: 'active' | 'needs_setup' | 'not_requested'; message?: string; auto_reply_enabled?: boolean; auto_delivery_enabled?: boolean }
   publication?: Publication
-  collection?: { warnings?: string[] }
+  collection?: { warnings?: string[]; items?: OperationItem[]; finished?: boolean }
+  analysis_scope?: {sample_ids:string[];completed_samples:number;batch_count:number}
   ranking?: {
+    requested_limit?: number
+    candidates?: OperationItem[]
     ranking_note: string
     pricing: { median?: number; p25?: number; p75?: number; sample_count: number }
     hot100: OperationItem[]
@@ -72,7 +80,7 @@ export interface OperationJob {
   artifacts?: string[]
   result?: OperationResult
   publication?: Publication
-  parameters?: { publish_snapshot?: {account_id?:string;automation?:{ai_config_ref?:string|null}}; workflow_hold?:string; copy_guidance?:string; publish_at?:string; schedule_batches?:string[]; schedule_batch_id?:string; folder?: string; confirmed_facts?: string[]; publish_mode?: 'review' | 'automatic'; publish_account_id?: string | null; publish_variant_index?:number; account_id?: string | null; ai_config_ref?: string | null; delivery_card_id?: number | null; delivery_text?: string | null; delivery_chat_draft?: {name?:string;content?:string} }
+  parameters?: { research_limit?:number; publish_snapshot?: {account_id?:string;automation?:{ai_config_ref?:string|null}}; workflow_hold?:string; copy_guidance?:string; publish_at?:string; schedule_batches?:string[]; schedule_batch_id?:string; folder?: string; confirmed_facts?: string[]; publish_mode?: 'review' | 'automatic'; publish_account_id?: string | null; publish_variant_index?:number; account_id?: string | null; ai_config_ref?: string | null; delivery_card_id?: number | null; delivery_text?: string | null; delivery_chat_draft?: {name?:string;content?:string} }
 }
 export interface OperationProfile {
   copy_guidance?:string

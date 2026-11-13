@@ -91,3 +91,39 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await research.analyze({}, '源码', self.samples(5), {}, AsyncMock())
         model.assert_awaited_once()
+
+    async def test_truncated_output_retries_with_more_tokens_and_same_samples(self):
+        model=AsyncMock(side_effect=[IncompleteModelOutput('截断',finish_reason='length'),{}])
+        result={}
+        with patch('operations.research.ai.analyze_batch',model):
+            await research.analyze({},'源码',self.samples(2),result,AsyncMock())
+        self.assertEqual(model.await_count,2)
+        self.assertEqual(model.await_args_list[0].args[2],model.await_args_list[1].args[2])
+        self.assertEqual(model.await_args.kwargs['max_tokens'],3600)
+        self.assertNotIn('analysis_error',result)
+
+    async def test_truncation_reports_actual_failure_instead_of_timeout(self):
+        model=AsyncMock(side_effect=IncompleteModelOutput('截断',finish_reason='length'))
+        result={}
+        with patch('operations.research.ai.analyze_batch',model):
+            with self.assertRaisesRegex(ValueError,'长度上限.*增加输出额度'):
+                await research.analyze({},'源码',self.samples(1),result,AsyncMock())
+        self.assertEqual(result['analysis_error']['code'],'output_truncated')
+        self.assertEqual(result['analysis_error']['completed_samples'],0)
+
+    async def test_smaller_scope_reuses_only_matching_batches_and_preserves_extra_evidence(self):
+        result={'analysis_batches':[{'_sample_ids':[str(i)],'observations':[]} for i in range(44)]}
+        model=AsyncMock()
+        with patch('operations.research.ai.analyze_batch',model):
+            active=await research.analyze({},'源码',self.samples(10),result,AsyncMock())
+        model.assert_not_awaited()
+        self.assertEqual(len(active),10)
+        self.assertEqual(len(result['analysis_batches']),44)
+        self.assertEqual(result['analysis_scope']['completed_samples'],10)
+
+    def test_research_selection_has_an_absolute_hot_count_cap(self):
+        from operations.domain import rank_items
+        ranking=rank_items([{'item_id':str(i),'title':'源码','want_count':i} for i in range(304)],'源码')
+        samples=research.select_samples(ranking,{'research_limit':10,'product_kind':'source'})
+        self.assertEqual(len(samples),10)
+        self.assertEqual([i['item_id'] for i in samples],[str(i) for i in range(303,293,-1)])

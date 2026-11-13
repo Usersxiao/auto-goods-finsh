@@ -14,13 +14,17 @@ def summary(job, result, status=None):
         return '商品内容已准备并确认，将于 '+display(job.parameters['publish_at'])+' 自动发布。可以说“查看排期”“修改发布时间”或“取消排期”。'
     if status=='schedule_missed':return '已错过发布时间，商品内容已保留。请重新设置排期后确认发布。'
     if status=="waiting_assets":
-        return "市场研究已完成。继续发素材文件夹路径，我会据此准备标题、完整详情、定价和商品预览。"
+        limit=job.parameters.get('research_limit',100)
+        count=len(result.get('ranking',{}).get('hot100',[]))
+        return f"Hot{limit}市场研究已完成，本次榜单收录{count}件商品。继续发素材文件夹路径，我会据此准备标题、完整详情、定价和商品预览。"
     if status=="cancelled":
         return "任务已停止，已完成的内容已保留。需要时可以从当前进度继续。"
     if status=="failed":
         count=len(result.get("collection",{}).get("items",[]))
         message=getattr(job,"error",None) or "本次处理未完成"
-        return (f"已采集 {count} 件商品，结果已保留。\n\n" if count else "")+message+"\n\n点击“从断点继续”可接着处理。"
+        ranking=result.get('ranking',{})
+        scope=(f"，Hot{job.parameters.get('research_limit',100)}榜单收录{len(ranking.get('hot100',[]))}件" if ranking else "")
+        return (f"已采集 {count} 件候选商品{scope}，结果已保留。\n\n" if count else "")+message+"\n\n点击“从断点继续”可接着处理。"
     ranking=result.get("ranking",{})
     count=len(ranking.get("hot100",[]))
     price=result.get("price",{}).get("suggested")

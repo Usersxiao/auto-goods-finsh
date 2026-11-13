@@ -256,7 +256,7 @@ class OrderBargainingTests(unittest.IsolatedAsyncioTestCase):
             response = await self.quote(message)
             q = await self.get_quote()
             self.assertEqual(q.quote_cents, price)
-            self.assertIn("先拍下别付款", response)
+            self.assertIn("拍下后我这边会自动改订单金额", response)
         self.assertEqual(q.rounds, 3)
         self.mtop.assert_not_awaited()
 
@@ -265,6 +265,25 @@ class OrderBargainingTests(unittest.IsolatedAsyncioTestCase):
         await self.quote("便宜一点", event="event-1")
         await self.quote("便宜一点", event="event-2")
         self.assertEqual((await self.get_quote()).rounds, 1)
+
+    async def test_change_price_before_order_explains_automatic_settlement(self):
+        offered = await self.quote("有优惠不")
+        reply = await self.quote("那你改一下价格")
+        self.assertIn("拍下后我这边会自动改订单金额", offered)
+        self.assertIn("还没查到这件商品的待付款订单", reply)
+        self.assertIn("自动改到 ¥96.67", reply)
+        self.assertNotIn("等卖家", reply)
+        self.assertNotIn("先拍下别付款", reply)
+        self.assertEqual((await self.get_quote()).rounds, 1)
+        self.mtop.assert_not_awaited()
+
+    async def test_discount_request_with_unpaid_order_applies_before_reply(self):
+        await self.order()
+        reply = await self.quote("有优惠不")
+        self.assertEqual(self.goods, 9667)
+        self.assertIn("订单金额已核对", reply)
+        self.assertNotIn("拍下后", reply)
+        self.assertEqual(len(self.writes()), 1)
 
     async def test_concurrent_duplicate_quotes_are_serialized(self):
         await self.quote("便宜一点")
@@ -529,6 +548,62 @@ class OrderBargainingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("多个订单", await self.service.apply((await self.get_quote()).id))
         self.mtop.assert_not_awaited()
 
+    async def test_imported_order_without_chat_is_verified_and_linked(self):
+        await self.quote()
+        order = await self.order(chat_id=None)
+        reply = await self.quote("那你改一下价格")
+        self.assertIn("订单金额已核对", reply)
+        self.assertEqual(len(self.writes()), 1)
+        async with async_session_maker() as session:
+            saved = await session.get(XYOrder, order.id)
+            self.assertEqual(saved.chat_id, self.chat)
+
+    async def test_order_with_empty_chat_is_verified_and_linked(self):
+        await self.quote()
+        order = await self.order(chat_id="")
+        await self.service.apply((await self.get_quote()).id)
+        self.assertEqual(len(self.writes()), 1)
+        async with async_session_maker() as session:
+            self.assertEqual((await session.get(XYOrder, order.id)).chat_id, self.chat)
+
+    async def test_order_with_other_chat_is_never_rebound(self):
+        await self.quote()
+        order = await self.order(chat_id="other-chat")
+        self.assertIsNone(await self.service.apply((await self.get_quote()).id))
+        self.mtop.assert_not_awaited()
+        async with async_session_maker() as session:
+            self.assertEqual((await session.get(XYOrder, order.id)).chat_id, "other-chat")
+
+    async def test_missing_chat_does_not_skip_platform_identity_check(self):
+        await self.quote()
+        order = await self.order(chat_id=None)
+        self.platform_buyer = "other-buyer"
+        await self.service.apply((await self.get_quote()).id)
+        self.assertEqual(self.writes(), [])
+        async with async_session_maker() as session:
+            self.assertIsNone((await session.get(XYOrder, order.id)).chat_id)
+
+    async def test_imported_order_plus_existing_order_requires_review(self):
+        await self.quote()
+        await self.order()
+        await self.order(chat_id=None)
+        reply = await self.service.apply((await self.get_quote()).id)
+        self.assertIn("多个订单", reply)
+        self.mtop.assert_not_awaited()
+
+    async def test_concurrent_chats_cannot_both_claim_imported_order(self):
+        await self.quote()
+        other_chat = "other-chat"
+        await self.service.respond("便宜一点", self.buyer, self.item, other_chat, "100", SETTINGS)
+        first = await self.get_quote()
+        second = await self.service.get_quote(self.buyer, self.item, other_chat)
+        order = await self.order(chat_id=None)
+        replies = await asyncio.gather(self.service.apply(first.id), self.service.apply(second.id))
+        self.assertEqual(sum(reply is not None for reply in replies), 1)
+        self.assertEqual(len(self.writes()), 1)
+        async with async_session_maker() as session:
+            self.assertIn((await session.get(XYOrder, order.id)).chat_id, (self.chat, other_chat))
+
     async def test_manual_pause_and_tightened_settings_prevent_write(self):
         await self.quote()
         await self.order()
@@ -638,6 +713,59 @@ class OrderBargainingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await AutoReplyAiMixin._settle_bargain_pending_order(fake, parsed, None), [])
         fake._send_text_with_separator.assert_not_awaited()
         self.mtop.assert_not_awaited()
+
+    def settlement_fixture(self):
+        fake = SimpleNamespace(cookie_id=self.account_id, _reply_trace_var=ContextVar("fixture-trace", default={}),
+            _record_bargain_diagnostics=AsyncMock(),
+            _check_chat_processed=AsyncMock(return_value=False), _mark_chat_processed=AsyncMock(),
+            get_filter_keywords=AsyncMock(return_value=[]), should_skip_reply=lambda *args: False,
+            _get_account=AsyncMock(return_value=self.account),
+            _build_text_reply_segments=lambda text: [{"type": "text", "content": text}],
+            _send_text_with_separator=AsyncMock(return_value=[{"success": True}]))
+        parsed = {"send_user_id": self.buyer, "item_id": self.item, "chat_id": self.chat,
+                  "send_message": "[我已拍下，待付款]"}
+        return fake, parsed
+
+    async def test_pending_event_rechecks_delayed_order_without_buyer_followup(self):
+        await self.quote()
+        fake, parsed = self.settlement_fixture()
+        async def insert_order(delay):
+            self.assertEqual(self.writes(), [])
+            await self.order()
+        with patch("app.services.xianyu.auto_reply_ai.check_item_belongs_to_account", AsyncMock(return_value=True)), \
+             patch("app.services.xianyu.auto_reply_ai.asyncio.sleep", AsyncMock(side_effect=insert_order)) as sleep:
+            result = await AutoReplyAiMixin._settle_bargain_pending_order(fake, parsed, None)
+        self.assertTrue(result[0]["success"])
+        sleep.assert_awaited_once_with(0.5)
+        self.assertEqual(len(self.writes()), 1)
+        self.assertIn("订单金额已核对", fake._send_text_with_separator.call_args.kwargs["text"])
+        self.assertEqual((await self.get_quote()).rounds, 1)
+
+    async def test_pending_event_missing_order_has_bounded_checks_and_no_success_message(self):
+        await self.quote()
+        fake, parsed = self.settlement_fixture()
+        with patch("app.services.xianyu.auto_reply_ai.check_item_belongs_to_account", AsyncMock(return_value=True)), \
+             patch("app.services.xianyu.auto_reply_ai.asyncio.sleep", AsyncMock()) as sleep:
+            result = await AutoReplyAiMixin._settle_bargain_pending_order(fake, parsed, None)
+        self.assertEqual(result, [])
+        self.assertEqual([c.args[0] for c in sleep.await_args_list], [0.5, 1, 2])
+        fake._send_text_with_separator.assert_not_awaited()
+        self.mtop.assert_not_awaited()
+
+    async def test_manual_pause_during_pending_order_recheck_stops_adjustment(self):
+        await self.quote()
+        fake, parsed = self.settlement_fixture()
+        paused = False
+        async def insert_and_pause(delay):
+            nonlocal paused
+            await self.order()
+            paused = True
+        with patch("app.services.xianyu.auto_reply_ai.check_item_belongs_to_account", AsyncMock(return_value=True)), \
+             patch("app.services.xianyu.auto_reply_ai.pause_manager.is_chat_paused", side_effect=lambda *args: paused), \
+             patch("app.services.xianyu.auto_reply_ai.asyncio.sleep", AsyncMock(side_effect=insert_and_pause)):
+            self.assertEqual(await AutoReplyAiMixin._settle_bargain_pending_order(fake, parsed, None), [])
+        self.assertEqual(self.writes(), [])
+        fake._send_text_with_separator.assert_not_awaited()
 
     async def test_system_message_handler_reaches_settlement_and_records_result(self):
         await self.quote()

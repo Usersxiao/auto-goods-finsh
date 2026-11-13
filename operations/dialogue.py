@@ -298,7 +298,7 @@ def fast(text):
     if re.fullmatch(r'(?:查看|列出|显示)?(?:历史任务|历史对话)',text):return [('history',{})]
     if re.fullmatch(r'(?:查看|列出|显示|刷新)?AI(?:接口|配置)(?:列表)?',text,re.I):return [('ai_list',{})]
     if re.fullmatch(r'(?:查看|显示|检查)?(?:商品预览|预览商品|发布预览)',text):return [('inspect',{'section':'preview'})]
-    if re.fullmatch(r'(?:查看|显示)?(?:研究报告|研究结果|分析报告)',text):return [('inspect',{'section':'report'})]
+    if re.fullmatch(r'(?:查看|显示|打开|看看)?(?:研究报告|研究结果|分析报告|采集结果|采集商品|采集的商品|已采集商品|热度榜|Hot\s*\d+(?:榜单|热度榜)?)',text,re.I):return [('inspect',{'section':'report'})]
     if re.fullmatch(r'(?:查看|显示)?(?:发货内容|当前卡券)',text):return [('card_preview',{})]
     if re.fullmatch(r'(?:停止|停止任务|取消任务|暂停|暂停任务)',text):return [('stop',{})]
     if re.fullmatch(r'(?:继续|恢复|重试|继续任务|恢复任务|从断点继续)',text):return [('resume',{})]
@@ -554,7 +554,9 @@ async def execute(action,job,user,payload):
         if section=='preview':
             reply=plan_text(await publishing.prepare(job,int(job.parameters.get('publish_variant_index',0))));extras['ui_action']='preview'
         elif section=='report':
-            reply=(job.result or {}).get('analysis',{}).get('summary') or '当前研究报告尚在准备中。'
+            result=job.result or {}
+            count=len(result.get('collection',{}).get('items') or result.get('ranking',{}).get('candidates') or result.get('ranking',{}).get('hot100') or [])
+            reply=(job.result or {}).get('analysis',{}).get('summary') or (f'已采集{count}件候选商品，可在结果面板查看商品、文案和原商品链接。AI研究报告尚未完成。' if count else '暂未采集到商品，任务开始取得结果后即可查看。')
             extras['ui_action']='report'
         elif section=='delivery':return await execute(ToolAction(tool='card_preview'),job,user,payload)
         elif section=='distribution':
@@ -605,8 +607,10 @@ async def execute(action,job,user,payload):
         job=await api.owned(job.id,user);reply='已修改'+('、'.join({'price':'售价','title':'标题','description':'详情'}.get(k,k) for k in args))+'，其余商品内容已保留。'
     elif tool in {'prepare','auto_price','revise','facts','folder','research','resume','stop'}:
         if tool=='research':
+            from operations.domain import research_overrides
             options={k:v for k,v in job.parameters.items() if k in api.Settings.model_fields}
             options.update({k:v for k,v in args.items() if k in api.Settings.model_fields})
+            options.update(research_overrides(payload.message))
             if options.get('publish_account_id'):options['publish_account_id']=await match_account(user.id,options['publish_account_id'])
             response=await api.start(api.Start(keyword=args.get('keyword',''),folder=args.get('folder'),request_key=payload.request_key,
                 overrides=api.Settings(**options) if options else None),user)

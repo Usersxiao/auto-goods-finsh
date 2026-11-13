@@ -11,7 +11,7 @@ from app.api.deps import get_current_active_user
 from common.db.session import async_session_maker
 from common.models.user import User, UserRole
 from operations import store, automation, ai_connections, distribution, delivery, media, dialogue, scheduling, performance, optimization
-from operations.domain import extract_keyword
+from operations.domain import extract_keyword, research_overrides
 from operations.models import Job
 from operations.reports import directory
 from operations.assets import resolve_folder
@@ -40,6 +40,7 @@ class Settings(PublishSettings):
     copy_guidance: str = Field('',max_length=2000)
     account_id: str | None = None
     product_kind: Literal["source","software","service","account","tutorial","all"] = "source"
+    research_limit: int = Field(100,ge=1,le=100)
     sample_target: int = Field(300,ge=20,le=800)
     max_pages: int = Field(15,ge=1,le=30)
     detail_limit: int = Field(100,ge=1,le=130)
@@ -316,7 +317,7 @@ async def start(payload:Start,user:User=Depends(get_current_active_user)):
         row=await store.create(user.id,keyword,payload.request_key,params)
     except ValueError as exc:
         raise HTTPException(409,str(exc))
-    return {"success":True,"job":serialize(row),"reply":"研究任务已创建，系统会自动采集、排名和分析。完成后可以直接发送素材文件夹路径。"}
+    return {"success":True,"job":serialize(row),"reply":f"Hot{params['research_limit']}研究任务已创建：最多采集{params['sample_target']}件候选，按有效热度排名，AI分析最多{params['research_limit']}件商品。完成后可以直接发送素材文件夹路径。"}
 
 
 @router.get("/jobs/{job_id}")
@@ -665,6 +666,10 @@ async def dispatch_chat(payload:Chat,user):
     if job:
         inherited={k:v for k,v in job.parameters.items() if k in Settings.model_fields}
         start_settings=Settings(**{**inherited,**overrides})
+    if re.match(r'^(?:请|帮我|给我)?(?:研究|采集|分析|关键词)',text):
+        requested=research_overrides(text)
+        if requested:
+            start_settings=Settings(**{**(start_settings.model_dump(exclude_unset=True) if start_settings else {}),**requested})
     direct=await dialogue.handle(payload,user,job)
     if direct is not None:return direct
     card_command=delivery.command(text,job.parameters.get('delivery_chat_draft') if job else None)

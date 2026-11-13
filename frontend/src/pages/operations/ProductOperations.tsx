@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowDown, CheckCheck, CreditCard, Download, Eye, FileText, FolderOpen, ClipboardCheck, ClipboardList, History, CalendarClock, LayoutGrid, Loader2, MessageSquare, PanelLeft, PanelRight, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Square, Timer, X, Zap } from 'lucide-react'
+import { ArrowDown, CheckCheck, CreditCard, Eye, FileText, FolderOpen, ClipboardCheck, ClipboardList, History, CalendarClock, LayoutGrid, Loader2, MessageSquare, PanelLeft, PanelRight, Plus, RefreshCw, Search, Send, Settings2, Sparkles, Square, Timer, X, Zap } from 'lucide-react'
 import {
   addOperationVideos, configureOperationPublish, downloadOperationFile, getOperationEvents, getOperationProfile, prepareOperation,
   getOperationJob, getPublishOptions, getPublishPlan, operationAction, publishOperation, saveOperationProfile, sendOperationMessage,
@@ -33,7 +33,8 @@ import { useConversationReading } from './useConversationReading'
 import { SessionSidebar } from './SessionSidebar'
 import { WorkspacePanel, type WorkspaceTab } from './WorkspacePanel'
 import './operations.css'
-import { buttonClass, Dialog, errorText, Evidence, statuses } from './ui'
+import { buttonClass, Dialog, errorText, statuses } from './ui'
+import { hasResearchResults, ResearchResults } from './ResearchResults'
 
 type Mode = 'review' | 'automatic'
 interface PublishReview {plan:PublishPlan|null;job:OperationJob;variant:number;accountName:string;deliveryName:string;revision:number}
@@ -218,7 +219,7 @@ function OperationsWorkspace({owner}:{owner:number|undefined}) {
     setDistributionOpen(false)
     setDistributionSelection(null)
     if (id === currentId) { setHistoryOpen(false); return }
-    setProgressOpen(false)
+    setProgressOpen(false);setReportOpen(false)
     clearReviewReturn();setSettingsOpen(null)
     reading.capture()
     signature.current = ''; planRequest.current++; setSelectionReady(true);data.clearIssues()
@@ -227,7 +228,7 @@ function OperationsWorkspace({owner}:{owner:number|undefined}) {
     setConfirmPlan(null); setEditOpen(null); setVariant(0); setCurrentId(id); setJob(null); setEvents([]); setOptimistic([]); setPlan(null); setError(''); setNotice(''); setHistoryOpen(false)
   }
   const fresh = () => {
-    setProgressOpen(false)
+    setProgressOpen(false);setReportOpen(false)
     clearReviewReturn();setSettingsOpen(null)
     setDeliveryOpen(null)
     setDistributionOpen(false)
@@ -313,11 +314,6 @@ function OperationsWorkspace({owner}:{owner:number|undefined}) {
       }
     } catch (reason) { if (selectedId.current === currentId) setError(errorText(reason)) }
     finally { setActionBusy(null) }
-  }
-  const download = async (name: string) => {
-    if (!currentId) return
-    try { await downloadOperationFile(currentId, name) }
-    catch (reason) { setError(errorText(reason)) }
   }
   const openSettings = async (scope: 'default' | 'task') => {
     const selection=selectedId.current
@@ -477,8 +473,9 @@ function OperationsWorkspace({owner}:{owner:number|undefined}) {
             {options.accounts.map(account => <option key={account.id} value={account.id} disabled={!account.active}>{account.label}（{account.id}）{!account.active ? ' · 未登录或未启用' : ''}</option>)}
           </select><button type="button" aria-label="刷新账号列表" title="刷新账号列表" disabled={accountsBusy || accountBusy} onClick={() => void refreshAccounts()} className="shrink-0 rounded p-1 text-slate-400 hover:text-slate-700">{accountsBusy || accountBusy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}</button></label>
           <label className={cn('operation-mode-picker', mode === 'automatic' && 'is-automatic')}>{mode === 'automatic' ? <Zap size={12} /> : <CheckCheck size={13} />}<select aria-label="发布模式" value={mode} disabled={active || publicationLocked || modeBusy || accountBusy || accountsBusy || sending || contextBlocked} onChange={event => void changeMode(event.target.value as Mode)}><option value="review">审核后发布</option><option value="automatic">自动生成并发布</option></select>{modeBusy && <Loader2 size={11} className="animate-spin" />}</label>
-          <div className="ml-auto flex items-center gap-2">{job && ['failed', 'cancelled'].includes(job.status) && <button disabled={!!actionBusy || accountBusy || contextBlocked} className="flex items-center gap-1 whitespace-nowrap text-[11px] text-blue-600 disabled:opacity-50" onClick={() => void action('resume')}>{actionBusy === 'resume' && <Loader2 size={11} className="animate-spin" />}继续任务</button>}{result?.analysis && <button className="flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-500 hover:text-blue-600" onClick={() => setReportOpen(true)} title="查看研究结果"><FileText size={13} /><span className="hidden sm:inline">研究报告</span></button>}</div>
+          <div className="ml-auto flex items-center gap-2">{job && ['failed', 'cancelled'].includes(job.status) && <button disabled={!!actionBusy || accountBusy || contextBlocked} className="flex items-center gap-1 whitespace-nowrap text-[11px] text-blue-600 disabled:opacity-50" onClick={() => void action('resume')}>{actionBusy === 'resume' && <Loader2 size={11} className="animate-spin" />}继续任务</button>}{hasResearchResults(job) && <button disabled={contextBlocked} className="flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-500 hover:text-blue-600 disabled:opacity-40" onClick={() => setReportOpen(true)} title="查看采集与研究结果" aria-label="查看采集与研究结果"><FileText size={13} /><span className="hidden sm:inline">采集结果</span></button>}</div>
         </div>
+        {job&&!contextBlocked&&hasResearchResults(job)&&<div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900/30" data-testid="research-results-entry"><div className="min-w-0 text-xs"><p className="font-medium text-slate-700 dark:text-slate-200">已采集 {result?.collection?.items?.length??result?.ranking?.candidates?.length??result?.ranking?.hot100?.length??0} 件候选商品</p><p className="mt-1 text-[10px] text-slate-400">{result?.ranking?.hot100?.length?`Hot${result.ranking.requested_limit||job.parameters?.research_limit||100} 榜单 ${result.ranking.hot100.length} 件`:'热度榜待整理'} · {result?.analysis?'研究报告已生成':'已有商品可先查看'}</p></div><button type="button" className={buttonClass} onClick={()=>setReportOpen(true)}><Eye size={13}/>查看采集结果</button></div>}
         {findOpen&&currentId&&<ConversationFind key={currentId} events={events} change={(query,id)=>setFind({query,id})} locate={locateMessage} close={closeFind}/>}
         <div className="operations-thread">
         <div ref={feed} className="operations-feed" data-testid="conversation-feed" onScroll={reading.onScroll}>
@@ -531,14 +528,7 @@ function OperationsWorkspace({owner}:{owner:number|undefined}) {
         {renderPreview(true)}
       </div>
     </div>}
-    {reportOpen && job && <Dialog title="研究与商品方案" close={() => setReportOpen(false)}><div className="space-y-5 text-xs leading-7">
-      <div className="flex flex-wrap gap-2">{job.artifacts?.filter(name => name.endsWith('.zip') || name.endsWith('.csv') || name.endsWith('.md')).map(name => <button key={name} className={buttonClass} onClick={() => void download(name)}><Download size={13} />{name}</button>)}</div>
-      <p className="whitespace-pre-wrap">{result?.analysis?.summary}</p>
-      {[
-        ['竞品文案分析', result?.analysis], ['商品事实与来源', result?.facts], ['定位与主图方案', result?.draft], ['定价依据', result?.price],
-      ].map(([label, value]) => value && <details key={String(label)} className="rounded-xl border border-slate-200 p-3 dark:border-slate-700"><summary className="cursor-pointer font-medium">{String(label)}</summary><div className="mt-3"><Evidence value={value as Parameters<typeof Evidence>[0]['value']} /></div></details>)}
-      {!!result?.ranking?.hot100?.length && <details className="rounded-xl border border-slate-200 p-3 dark:border-slate-700"><summary className="cursor-pointer font-medium">采样热度榜 · {job.hot_count} 件</summary><p className="my-3 text-slate-400">{result.ranking.ranking_note}</p><div className="overflow-auto"><table className="w-full text-left"><thead><tr>{['排名', '商品', '标价', '想要'].map(label => <th className="p-2" key={label}>{label}</th>)}</tr></thead><tbody>{result.ranking.hot100.map(item => <tr key={item.item_id} className="border-t border-slate-100 dark:border-slate-700"><td className="p-2">{item.rank}</td><td className="min-w-[180px] p-2"><a className="text-primary-600" href={`https://www.goofish.com/item?id=${encodeURIComponent(item.item_id)}`} target="_blank" rel="noopener noreferrer">{item.title}</a></td><td className="p-2">{item.price ?? '—'}</td><td className="p-2">{item.want_count ?? '缺失'}</td></tr>)}</tbody></table></div></details>}
-    </div></Dialog>}
+    {reportOpen && job && <ResearchResults key={job.id} job={job} close={()=>setReportOpen(false)} download={name=>downloadOperationFile(job.id,name)}/>}
     {qualityTarget&&<QualityPanel key={qualityTarget.jobId} jobId={qualityTarget.jobId} variant={qualityTarget.variant} initial={qualityTarget.report} close={()=>setQualityTarget(null)} action={value=>{if(qualityTarget.variant!=null)setVariant(qualityTarget.variant);setQualityTarget(null);if(value==='settings'||value==='pricing')void openSettings('task');else if(value==='delivery')openDelivery();else if(value==='prepare')void prepareDraft();else if(value==='workshop')openWorkspace('workshop');else if(value==='edit')openEditor(qualityTarget.variant??variant);else if(value==='publication')void send(undefined,'核对发布结果');else if(value==='facts')setText('补充商品事实：')}} optimized={async(proposal,reply)=>{setQualityTarget(null);setPerformanceReports(undefined);setOptimizationProposal(proposal);setPerformanceOpen(true);setNotice(reply);await changed()}}/>}
     {revisionTarget&&<RevisionPanel key={revisionTarget.jobId} jobId={revisionTarget.jobId} initialRevision={revisionTarget.revision} close={()=>setRevisionTarget(null)} changed={async()=>{setConfirmPlan(null);await changed()}}/>}
     {accountCheckTarget&&<PublicationAuditEditor target={accountCheckTarget} close={()=>setAccountCheckTarget(null)} changed={changed}/>}

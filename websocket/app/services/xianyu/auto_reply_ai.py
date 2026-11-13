@@ -1,6 +1,7 @@
 """AI回复与买家上下文。由自动回复入口组合，保持现有调用签名。"""
 from __future__ import annotations
 
+import asyncio
 import traceback
 from typing import Any, Dict, Optional
 
@@ -211,7 +212,19 @@ class AutoReplyAiMixin:
             quote = await service.get_quote(buyer, item_id, chat_id)
             if not quote or quote.quote_cents >= quote.base_cents:
                 return []
-            reply = await service.apply(quote.id)
+            # A platform notification may race the local order insert. Re-read
+            # briefly instead of requiring the buyer to send another message.
+            # Only a missing order (None) is retried here; apply owns all write
+            # claims, rejection budgets and uncertain-result reconciliation.
+            reply = None
+            for delay in (0, 0.5, 1, 2):
+                if delay:
+                    await asyncio.sleep(delay)
+                if not allowed():
+                    return []
+                reply = await service.apply(quote.id)
+                if reply:
+                    break
             if not reply or not allowed():
                 return []
             trace = self._reply_trace_var.get()

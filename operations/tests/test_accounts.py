@@ -88,6 +88,20 @@ class AccountChoiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(start.await_args.args[0].overrides.publish_account_id, 'b')
             self.assertIn('publish_account_id', start.await_args.args[0].overrides.model_fields_set)
 
+    async def test_hot10_chat_overrides_inherited_hot100_for_both_start_forms(self):
+        for message in ['采集“AI口播源码”的Hot10', '采集“AI口播源码”的Hot10，素材在“/Users/fixture/goods”']:
+            job=SimpleNamespace(id='previous',parameters={'research_limit':100,'sample_target':300,'max_pages':15,'detail_limit':100})
+            with self.subTest(message=message), \
+                 patch('operations.api.owned',AsyncMock(return_value=job)), \
+                 patch('operations.api.dialogue.handle',AsyncMock(return_value=None)), \
+                 patch('operations.api.start',AsyncMock(return_value={'success':True})) as start:
+                await api.dispatch_chat(api.Chat(message=message,job_id='previous',publish_account_id='b'),SimpleNamespace(id=100))
+            settings=start.await_args.args[0].overrides
+            self.assertEqual(settings.research_limit,10)
+            self.assertEqual(settings.sample_target,30)
+            self.assertEqual(settings.detail_limit,10)
+            self.assertEqual(settings.publish_account_id,'b')
+
     async def test_settings_reject_foreign_account_before_mutating_task(self):
         with patch('operations.api.owned', AsyncMock()), \
              patch('operations.api.publishing.resolve_account', AsyncMock(side_effect=ValueError('账号不属于当前用户'))), \

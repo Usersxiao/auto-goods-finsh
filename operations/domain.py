@@ -94,6 +94,7 @@ def rank_items(items, keyword, product_kind="source", limit=100):
     controls = [i for i in eligible[len(eligible)//2:] if i["item_id"] not in {j["item_id"] for j in eligible[:limit]}][:30]
     return {
         "ranking_version": "want_count_desc_v1",
+        "requested_limit": limit,
         "ranking_note": "采样范围内按想要数降序；销量未验证；缺失热度单列；同热度按商品ID稳定排序",
         "candidates": candidates,
         "hot100": eligible[:limit],
@@ -185,10 +186,24 @@ def safe_json(text):
     return result
 
 
+def research_overrides(message):
+    """Keep an explicit Hot/Top N separate from the candidate sampling budget."""
+    unquoted = re.sub(r'[“「\"]([^”」\"]*)[”」\"]', '', message)
+    match = re.search(r'(?:(?<![A-Za-z0-9])(?:hot|top)\s*|(?<!提)前\s*)(\d+)\s*(?:名|个|件|款)?', unquoted, re.I)
+    if not match:
+        return {}
+    count = int(match[1])
+    if not 1 <= count <= 100:
+        raise ValueError('热度榜数量支持1至100件，例如Hot10、Top20或前50件')
+    candidates = max(30, count * 3)
+    return {'research_limit': count, 'sample_target': candidates,
+            'max_pages': math.ceil(candidates / 20), 'detail_limit': count}
+
+
 def extract_keyword(message):
     quoted = re.search(r'[“「「\"]([^”」\"]{1,100})[”」\"]', message)
     if quoted:
         return quoted[1].strip()
     value = re.sub(r"^(?:请|帮我|给我|开始|研究|采集|分析|一下|商品|关键词|：|:|\s)+", "", message)
-    value = re.split(r"[,，。；;\n]|(?:的?\s*(?:hot\s*100|前100|热度最高|卖得最好|分析文案))", value, flags=re.I)[0]
+    value = re.split(r"[,，。；;\n]|(?:的?\s*(?:(?:hot|top)\s*\d+|前\s*\d+|热度最高|卖得最好|分析文案))", value, flags=re.I)[0]
     return value.strip(' 的：:')[:100]

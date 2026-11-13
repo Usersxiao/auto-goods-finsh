@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
-from sqlalchemy import BigInteger, DateTime, Integer, JSON, String, select, update
+from sqlalchemy import BigInteger, DateTime, Integer, JSON, String, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from loguru import logger
@@ -136,9 +136,13 @@ def message_kind(text: str) -> str | None:
     return None
 
 
-def quote_text(q: BargainQuote) -> str:
+def quote_text(q: BargainQuote, *, order_requested=False) -> str:
     prefix = "这已经到底价啦，" if q.reason == "round_limit" else ""
-    return f"{prefix}这次可以 ¥{money(q.quote_cents)}。先拍下别付款，等我确认订单改价后再付，报价保留24小时。"
+    if order_requested:
+        return (f"还没查到这件商品的待付款订单。你先拍下，我这边收到订单就自动改到 ¥{money(q.quote_cents)}，"
+                "改好会通知你，订单显示这个金额后就可以付款。")
+    return (f"{prefix}这次可以 ¥{money(q.quote_cents)}，报价保留24小时。"
+            "拍下后我这边会自动改订单金额，改好会通知你，订单显示这个价再付款就行。")
 
 
 class BargainingService:
@@ -197,7 +201,7 @@ class BargainingService:
                 return None
             if q.expires_at < datetime.utcnow() and q.state not in ("applying", "unknown"):
                 return "之前的报价已过期，先别付款，重新确认价格后再拍哦。"
-            return await self.apply(q.id, retry_rejected=kind == "retry") or quote_text(q)
+            return await self.apply(q.id, retry_rejected=kind == "retry") or quote_text(q, order_requested=True)
         try:
             base = cents(price)
             if base <= 0:
@@ -279,8 +283,9 @@ class BargainingService:
             orders = (await session.execute(select(XYOrder).where(
                 XYOrder.owner_id == q.owner_id, XYOrder.account_id == q.account_id,
                 XYOrder.buyer_id == q.buyer_id, XYOrder.item_id == q.item_id,
-                XYOrder.chat_id == q.chat_id, XYOrder.status == "pending_payment",
-            ).limit(2))).scalars().all()
+                or_(XYOrder.chat_id == q.chat_id, XYOrder.chat_id.is_(None), XYOrder.chat_id == ""),
+                XYOrder.status == "pending_payment",
+            ).limit(2).with_for_update())).scalars().all()
             if not orders:
                 return "订单已付款或结束，先由卖家核对金额。" if q.order_no else None
             if len(orders) != 1 or (q.order_no and q.order_no != orders[0].order_no):
@@ -295,6 +300,11 @@ class BargainingService:
                 q.reason = "order_or_price_unverified"
                 await session.commit()
                 return "订单状态或改价权限还没核对成功，请先别付款，等卖家确认。"
+            # Orders imported from the sold-order list can lack a chat ID. Bind
+            # only a unique candidate whose buyer/item/payment state the platform
+            # has just verified; an order linked to another chat never qualifies.
+            if not order.chat_id:
+                order.chat_id = q.chat_id
             if current <= q.quote_cents:
                 # Preserve any better price already applied by a human or the platform.
                 if reconcile and current != q.quote_cents:

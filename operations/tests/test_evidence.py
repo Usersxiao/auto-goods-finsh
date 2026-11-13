@@ -88,6 +88,20 @@ class EvidenceTests(unittest.IsolatedAsyncioTestCase):
                 await ask({'model':'fixture','base_url':'https://fixture.invalid','api_key':'fixture'},'测试',{},transport_retries=False,json_attempts=1)
         direct.assert_awaited_once()
 
+    async def test_length_finish_is_preserved_for_the_bounded_research_retry(self):
+        direct=AsyncMock(return_value={'choices':[{'message':{'content':'{"observations":[]}'},'finish_reason':'length'}]})
+        with patch('operations.intelligence.post_json',direct):
+            with self.assertRaises(IncompleteModelOutput) as caught:
+                await ask({'model':'fixture','base_url':'https://fixture.invalid','api_key':'fixture'},'测试',{},transport_retries=False,json_attempts=1)
+        self.assertEqual(caught.exception.finish_reason,'length')
+        direct.assert_awaited_once()
+
+    def test_complete_hot10_is_not_described_as_missing_ninety_items(self):
+        from operations.domain import rank_items
+        ranking=rank_items([{'item_id':str(i),'title':'源码','want_count':i} for i in range(30)],'源码',limit=10)
+        result=aggregate_analysis('源码',ranking,[])
+        self.assertFalse(any('不足100' in item or '不足10个' in item for item in result['limitations']))
+
     def test_large_descriptions_are_labeled_as_excerpts(self):
         result=compact({'item_id':'1','description':'文'*5000,'search_preview':'短文'})
         self.assertEqual(len(result['description']),1600)

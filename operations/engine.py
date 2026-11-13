@@ -106,9 +106,13 @@ async def run(job):
             collection["queries"] = list(dict.fromkeys(words))[:3]
         if not collection.get("finished"):
             await collector.collect(account,job.keyword,params,collection,save)
-        if "ranking" not in result:
+        research_limit = params.get("research_limit", 100)
+        if "ranking" not in result or (result.get("ranking") and result["ranking"].get("requested_limit", 100) != research_limit):
+            scope_changed = bool(result.get("ranking"))
             await save(stage="去重、商品分组与热度排名")
-            result["ranking"] = rank_items(collection["items"],job.keyword,params.get("product_kind","source"))
+            result["ranking"] = rank_items(collection["items"],job.keyword,params.get("product_kind","source"),limit=research_limit)
+            if scope_changed:
+                result.pop("analysis", None)
             result["ranking"]["collection_warnings"] = collection.get("warnings",[])
             if not result["ranking"]["hot100"]:
                 raise ValueError("已采集商品但热度字段不足，暂无可验证榜单；结果保留在证据文件中")
@@ -116,9 +120,7 @@ async def run(job):
         ranking = result["ranking"]
         if "analysis" not in result:
             # Same-kind research first; market-wide data remains in the exported board.
-            selected = ranking["comparable_hot"] or ranking["hot100"]
-            controls = [i for i in ranking["controls"] if params.get("product_kind")=="all" or i["kind"]==params.get("product_kind","source")]
-            samples = list({i["item_id"]:i for i in selected+controls}.values())
+            samples = research.select_samples(ranking,params)
             batches = await research.analyze(config,job.keyword,samples,result,save)
             await save(stage="生成市场研究报告")
             try:

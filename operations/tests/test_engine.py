@@ -74,6 +74,29 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job.result['analysis']['observations'][0]['evidence_ids'],['1'])
         self.assertFalse(any(call.kwargs.get('status')=='failed' for call in save.await_args_list))
 
+    async def test_hot10_resume_reuses_prior_analysis_without_recollecting_or_analyzing_extras(self):
+        candidates=[{'item_id':str(i),'title':'口播源码','price':'20','want_count':i} for i in range(304)]
+        batches=[{'_sample_ids':[str(i)],'observations':[{'finding':'源码交付','evidence_ids':[str(i)]}]} for i in range(303,259,-1)]
+        result={'collection':{'finished':True,'items':candidates},'ranking':rank_items(candidates,'口播源码'),
+                'analysis_batches':batches}
+        job=SimpleNamespace(id='fixture',owner_id=100,lease_token='lease',keyword='口播源码',
+                            parameters={'research_limit':10},result=result)
+        summary=AsyncMock(return_value={'summary':'Hot10研究完成'})
+        with patch('operations.engine.store.checkpoint',AsyncMock()), \
+             patch('operations.engine.store.inputs_or_wait',AsyncMock(return_value=None)), \
+             patch('operations.engine.ai.account_for',AsyncMock()), \
+             patch('operations.engine.ai.model_config',AsyncMock(return_value={'model':'fixture'})), \
+             patch('operations.engine.collector.collect',AsyncMock()) as collect, \
+             patch('operations.research.ai.analyze_batch',AsyncMock()) as analyze, \
+             patch('operations.engine.ai.summarize',summary), \
+             patch('operations.engine.reports.export',return_value=[]):
+            await run(job)
+        collect.assert_not_awaited();analyze.assert_not_awaited()
+        self.assertEqual(len(job.result['ranking']['hot100']),10)
+        self.assertEqual(job.result['analysis_scope']['completed_samples'],10)
+        self.assertEqual(len(summary.await_args.args[3]),10)
+        self.assertEqual(len(job.result['analysis_batches']),44)
+
     async def test_review_waits_and_automatic_dispatches_only_after_generation(self):
         for mode in ['review','automatic']:
             params={'folder':'/fixtures/goods','publish_mode':mode}

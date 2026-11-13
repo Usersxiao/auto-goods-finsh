@@ -57,6 +57,7 @@ def export(job):
     report += "任务："+job.id+"\n\n"
     report += "本报告为采样范围内的热度研究，竞品真实销量尚未验证。\n\n"
     if ranking:
+        report += f"研究目标：Hot{ranking.get('requested_limit',100)}；候选商品{ranking['coverage']['unique']}件，榜单收录{len(ranking.get('hot100',[]))}件。\n\n"
         report += "## 样本与排名\n\n"+ranking["ranking_note"]+"\n\n"+md_value(ranking["coverage"])
         report += "\n\n## 同类价格\n\n"+md_value(ranking["pricing"])
     for key, title in [("analysis","市场分析"),("facts","自己的商品事实"),("price","价格建议"),("draft","商品方案"),("publication","发布结果")]:

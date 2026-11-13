@@ -5,7 +5,7 @@ import math
 from datetime import datetime, timezone
 from common.services.xianyu_search_client import XianyuSearchClient, parse_search_item
 from common.services.xianyu_detail_client import XianyuItemDetailClient
-from operations.domain import number, price
+from operations.domain import number, price, rank_items
 
 
 class MarketSearch(XianyuSearchClient):
@@ -103,6 +103,8 @@ async def collect(account, keyword, parameters, state, save):
             raw_items = result.get("items", [])
             parse_errors = 0
             for raw in raw_items:
+                if len(items) >= target:
+                    break
                 try:
                     item = parse(raw, query, page)
                 except (ValueError, TypeError, AttributeError, KeyError):
@@ -126,11 +128,11 @@ async def collect(account, keyword, parameters, state, save):
         raise ValueError("搜索成功但未取得有效商品；请尝试更宽的关键词")
     # Enrich likely leaders plus a few ordinary samples for contrast.
     detail = XianyuItemDetailClient(account.account_id, search.cookies_str, owner_id=account.owner_id)
-    ordered = sorted(items, key=lambda i: number(i.get("want_count")) if number(i.get("want_count")) is not None else -1, reverse=True)
-    limit = min(parameters.get("detail_limit", 100), len(items))
-    control_count = min(10,max(1,limit//5)) if limit > 1 else 0
-    selection = ordered[:limit-control_count] + ordered[max(limit-control_count,len(ordered)//2):max(limit-control_count,len(ordered)//2)+control_count]
-    selection = list({i["item_id"]:i for i in selection}.values())
+    research_limit = parameters.get("research_limit", 100)
+    ranked = rank_items(items, keyword, parameters.get("product_kind", "source"), limit=research_limit)
+    limit = min(parameters.get("detail_limit", 100), research_limit, len(items))
+    leaders = ranked["comparable_hot"] or ranked["hot100"]
+    selection = list({i["item_id"]:known[i["item_id"]] for i in leaders + ranked["controls"]}.values())[:limit]
     done = state.setdefault("detail_done", [])
     for pos, item in enumerate(selection if not state.get("detail_deferred") else []):
         if item["item_id"] in done:

@@ -1,5 +1,5 @@
 import unittest
-from operations.domain import number,price,kind,rank_items,recommendation,extract_keyword
+from operations.domain import number,price,kind,rank_items,recommendation,extract_keyword,research_overrides
 
 
 class RankingTests(unittest.TestCase):
@@ -83,3 +83,25 @@ class RankingTests(unittest.TestCase):
     def test_command_keyword(self):
         self.assertEqual(extract_keyword('采集“AI口播源码”的Hot100'),'AI口播源码')
         self.assertEqual(extract_keyword('帮我研究AI口播源码，分析他们的文案'),'AI口播源码')
+
+    def test_hot_count_is_separate_from_candidate_sampling(self):
+        for message, count in [('采集“AI口播源码”的Hot10',10), ('采集AI口播源码Hot10',10),
+                               ('研究“口播源码”TOP 20',20), ('采集口播源码前5件',5)]:
+            with self.subTest(message=message):
+                settings=research_overrides(message)
+                self.assertEqual(settings['research_limit'],count)
+                self.assertEqual(settings['sample_target'],max(30,count*3))
+                self.assertEqual(settings['detail_limit'],count)
+        self.assertEqual(extract_keyword('采集AI口播源码Hot10'),'AI口播源码')
+        self.assertEqual(research_overrides('采集“Hot10麦克风”'),{})
+        self.assertEqual(research_overrides('采集口播源码，提前10分钟准备'),{})
+        for message in ['采集源码Hot0','采集源码Hot101']:
+            with self.assertRaisesRegex(ValueError,'1至100'):research_overrides(message)
+
+    def test_hot10_ranking_does_not_expand_to_one_hundred(self):
+        report=rank_items([{'item_id':str(i),'title':'口播源码','want_count':i,'price':20}
+                           for i in range(304)],'口播源码',limit=10)
+        self.assertEqual(report['requested_limit'],10)
+        self.assertEqual(len(report['hot100']),10)
+        self.assertEqual(len(report['comparable_hot']),10)
+        self.assertEqual(report['hot100'][0]['item_id'],'303')

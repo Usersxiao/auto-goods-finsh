@@ -46,7 +46,9 @@ async def model_config(owner_id, account):
 
 
 class IncompleteModelOutput(ValueError):
-    pass
+    def __init__(self, message, *, finish_reason=None):
+        super().__init__(message)
+        self.finish_reason = finish_reason
 
 
 async def ask(config, instruction, data, max_tokens=6000, compact_output=True, *, request_timeout=None, json_attempts=2, transport_retries=True):
@@ -54,6 +56,7 @@ async def ask(config, instruction, data, max_tokens=6000, compact_output=True, *
     messages=[{"role":"system", "content":SYSTEM},
         {"role":"user", "content":instruction+("\n请使用简洁表达，数组每项最多3句话；确保JSON完整闭合。" if compact_output else "\n完整写出本次要求的正文，段落清晰；确保JSON完整闭合。")+"\n以下为JSON数据：\n"+json.dumps(data, ensure_ascii=False)}]
     for attempt in range(json_attempts):
+        finish_reason = None
         budget=max_tokens if attempt==0 else min(max_tokens*2,16000)
         payload={"model":config["model"],"messages":messages,"temperature":.2,"max_tokens":budget,
                  "enable_thinking":False,"response_format":{"type":"json_object"}}
@@ -65,6 +68,7 @@ async def ask(config, instruction, data, max_tokens=6000, compact_output=True, *
                     {"Authorization":"Bearer "+config["api_key"],"Content-Type":"application/json"},payload,request_timeout)
                 response=await request_json_with_retries(*request_args,label="运营文案") if transport_retries else await post_json(*request_args)
             choice=(response.get("choices") or [{}])[0]
+            finish_reason=choice.get("finish_reason")
             content=(choice.get("message") or {}).get("content")
             text="".join(v.get("text","") for v in content if isinstance(v,dict)) if isinstance(content,list) else str(content or "")
             logger.info("运营结构化输出：model={} chars={} finish={}",config["model"],len(text),choice.get("finish_reason"))
@@ -78,14 +82,19 @@ async def ask(config, instruction, data, max_tokens=6000, compact_output=True, *
                 payload.pop("response_format",None)
                 async with httpx.AsyncClient(timeout=request_timeout) as client:
                     response=await post_json(client,*request_args[1:])
+                finish_reason=(response.get("choices") or [{}])[0].get("finish_reason")
                 content=((response.get("choices") or [{}])[0].get("message") or {}).get("content")
                 text="".join(v.get("text","") for v in content if isinstance(v,dict)) if isinstance(content,list) else str(content or "")
         try:
-            return safe_json(text)
+            parsed = safe_json(text)
         except (ValueError,TypeError):
-            if attempt+1>=json_attempts:
-                raise IncompleteModelOutput("模型返回不完整JSON，已保留其他批次；可从当前步骤重试")
-            messages[1]["content"] += "\n上次返回的JSON不完整。本次压缩表达，分析要点数组最多3项；标题与文案版本等明确数量的字段仍按原要求。完整输出全部必需字段。"
+            parsed = None
+        if parsed is not None and finish_reason != "length":
+            return parsed
+        if attempt+1>=json_attempts:
+            message = "模型输出达到长度上限，JSON被截断" if finish_reason == "length" else "模型返回不完整JSON"
+            raise IncompleteModelOutput(message+"，已保留其他批次；可从当前步骤重试", finish_reason=finish_reason)
+        messages[1]["content"] += "\n上次返回的JSON不完整。本次压缩表达，分析要点数组最多3项；标题与文案版本等明确数量的字段仍按原要求。完整输出全部必需字段。"
 
 
 def compact(item):
@@ -110,7 +119,7 @@ def validate_references(result, allowed, keys=("evidence_ids",)):
             validate_references(v, allowed, keys)
 
 
-async def analyze_batch(config, keyword, items):
+async def analyze_batch(config, keyword, items, *, max_tokens=1800):
     result = await ask(config, """分析下列竞品的标题、开头、卖点、信任证据、交付、售后和价格。
 title_source为search_display_text时，title只是搜索展示文字的首段。没有description时只能按search_preview分析，需明确完整详情未取得。
 输出 {"observations":[{"finding":"可核对的观察","evidence_ids":["商品ID"]}],
@@ -119,11 +128,11 @@ title_source为search_display_text时，title只是搜索展示文字的首段�
 "cautions":["样本缺失或比较限制"]}。证据ID只能来自输入商品，观察与假设至少各1条。
 这是小批次研究：observations最多3条、hypotheses最多2条、patterns最多2条、cautions最多2条，每个文字字段不超过70字。
 输入标记truncated的文字为节选，只分析可见内容。""",
-                       {"keyword":keyword, "items":[compact(i) for i in items]},max_tokens=1800,
+                       {"keyword":keyword, "items":[compact(i) for i in items]},max_tokens=max_tokens,
                        request_timeout=90,json_attempts=1,transport_retries=False)
     validate_references(result, {str(i["item_id"]) for i in items})
     if not result.get("observations") or not result.get("hypotheses"):
-        raise ValueError("竞品分析缺少事实或假设，请重试当前步骤")
+        raise IncompleteModelOutput("竞品分析缺少事实或假设，请重试当前步骤")
     return result
 
 
@@ -138,9 +147,10 @@ async def summarize(config, keyword, ranking, batches):
 {"summary":"市场概述", "positioning_opportunities":[{"idea":"机会","evidence_ids":["商品ID"]}],
 "copy_patterns":[{"pattern":"标题/详情结构","evidence_ids":["商品ID"]}],
 "buyer_concerns":["购买顾虑"],"hypotheses":[{"hypothesis":"待验证解释","evidence_ids":["商品ID"],"test":"下一步"}],
-"limitations":["限制"]}。不足100和对照不足要说明，真实成交量尚未验证。价格引用传入统计。""",
+"limitations":["限制"]}。对照输入中的requested_limit说明榜单是否收集足够，勿将较小目标描述为不足100。对照不足要说明，真实成交量尚未验证。价格引用传入统计。""",
         {"keyword":keyword, "coverage":ranking["coverage"], "prices":ranking["pricing"],
          "hot_count":len(ranking["hot100"]), "control_count":len(ranking["controls"]),
+         "requested_limit":ranking.get("requested_limit",100),
          "collection_warnings":ranking.get("collection_warnings",[]), "batches":digest},max_tokens=4500)
     validate_references(result, {str(i["item_id"]) for i in ranking["candidates"]})
     if not isinstance(result.get("summary"), str) or not result["summary"].strip():
@@ -177,8 +187,9 @@ def aggregate_analysis(keyword, ranking, batches):
     if prices.get("median") is not None:
         summary += f"同类有效价格样本{prices['sample_count']}个，中位数¥{prices['median']:.2f}。"
     limitations = ["热度依据想要数，竞品真实成交量尚未验证。"]
-    if len(ranking["hot100"]) < 100:
-        limitations.append("有热度字段的有效商品不足100个，按实际数量展示。")
+    requested_limit = ranking.get("requested_limit",100)
+    if len(ranking["hot100"]) < requested_limit:
+        limitations.append(f"有热度字段的有效商品不足{requested_limit}个，按实际数量展示。")
     if not ranking.get("controls"):
         limitations.append("本次缺少榜外对照样本，热度因素仅作为待验证假设。")
     if coverage.get("detail_count", 0) < coverage["relevant"]:
